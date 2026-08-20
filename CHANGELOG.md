@@ -1,31 +1,32 @@
 # Changelog
 
-## 8.2-GM — Stable
+## 8.2 — Stable
 
-- versão homologada após piloto em estação existente e estação limpa;
-- padronização da versão `8.2-GM` em deploy, logs, tarefa e CSV;
-- resumo de rede passa a considerar apenas interfaces físicas ativas;
-- endereços APIPA `169.254.x.x` removidos do resumo;
-- VPNs e interfaces virtuais removidas de `IPv4Adicionais` do resumo;
-- todos os endereços continuam preservados em `rede-<PC>.csv` e `interfaces-<PC>.csv`;
-- stagger de Startup entre 2 e 10 minutos por hostname;
-- fallback de Logon entre 1 e 5 minutos;
-- execução diária idempotente via `last-success.txt`;
-- retry do compartilhamento antes da coleta;
-- scripts de validação, teste imediato e rollback adicionados;
-- documentação de implantação e troubleshooting ampliada.
+- versão validada em estação piloto e em estação limpa;
+- padronização da versão `8.2` em deploy, logs, tarefa e CSV;
+- resumo de rede mostra apenas IPv4 relevantes de interfaces físicas ativas;
+- APIPA `169.254.x.x`, VPNs e interfaces virtuais ficam fora do resumo;
+- todos os endereços continuam disponíveis nos arquivos detalhados de rede;
+- execução distribuída entre 2 e 10 minutos após o boot;
+- coleta diária com marcador de sucesso;
+- logs locais de deploy e execução;
+- histórico JSON diário com retenção de 30 dias;
+- documentação de implantação, validação, rollback e troubleshooting ampliada;
+- nomes e exemplos do repositório público tornados completamente genéricos.
 
-## 8.1.1-GM
+## 8.1.1
 
-- correção da normalização de texto no Windows PowerShell 5.1;
-- substituição de `Replace(char, char)` por regex para remoção de BOM/NUL.
+- correção da normalização de caracteres no Windows PowerShell 5.1;
+- remoção de chamadas `Replace(char, char)` incompatíveis com substituição por string vazia.
 
-## 8.1-GM
+## 8.1
 
-- refatoração do coletor monolítico para componentes PowerShell legíveis;
-- separação entre deploy, tarefa, runner e coletor;
-- logs estruturados e atualização automática via GPO.
+- refatoração do coletor em PowerShell legível;
+- separação entre coleta, runner, instalador de tarefa e deploy via GPO;
+- retry do compartilhamento quando a rede ainda não está disponível;
+- uma coleta bem-sucedida por dia;
+- ferramentas auxiliares para AD, GPO, validação e rollback.
 
 ## 8.0
 
-- primeira versão pública sanitizada do projeto refatorado.
+- reorganização inicial do projeto público em `src`, `deploy`, `tools` e `docs`.
