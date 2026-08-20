@@ -1,8 +1,8 @@
 @echo off
 setlocal EnableExtensions DisableDelayedExpansion
 
-set "VERSION=8.2-GM"
-set "BASE=C:\ProgramData\GMInventory"
+set "VERSION=8.2"
+set "BASE=C:\ProgramData\InventoryAgent"
 set "LOG=%BASE%\logs\gpo-deploy.log"
 
 if not exist "%BASE%" mkdir "%BASE%" >nul 2>&1
