@@ -1,133 +1,94 @@
-# Implantação da v8.2-GM
-
-Este documento descreve o fluxo recomendado para implantar o Inventory — Deploy via GPO em estações Windows de domínio.
+# Implantação
 
 ## Pré-requisitos
 
-- Active Directory Domain Services;
-- GPMC/Group Policy Management;
-- Windows PowerShell 5.1 ou superior nas estações;
+- domínio Active Directory;
+- estações Windows 10/11;
+- PowerShell 5.1+;
 - compartilhamento SMB acessível pelas contas de computador;
-- permissão NTFS de gravação/modificação no diretório central;
-- computadores dentro de uma OU gerenciada pela GPO.
+- GPO vinculada à OU das estações;
+- grupo de segurança dedicado para limitar o escopo.
 
-## 1. Preparar o grupo de computadores
-
-Use um grupo de segurança dedicado.
-
-```powershell
-.\tools\Configure-ADInventoryAccess.ps1 `
-  -ComputerOU "OU=Workstations,DC=example,DC=local" `
-  -GroupOU "OU=Groups,DC=example,DC=local" `
-  -GroupName "Inventory-GPO-Computers" `
-  -InventoryPath "\\FILESERVER\InventoryShare\Inventory"
-```
-
-O script valida as OUs, cria o grupo caso não exista, adiciona computadores habilitados da OU e aplica `Modify` no NTFS sem remover as ACLs existentes.
-
-Confira separadamente a ACL do compartilhamento SMB.
-
-## 2. Definir INVENTORY_DESTINO
+## Destino central
 
 Configure a variável de ambiente de máquina:
 
 ```text
-Nome: INVENTORY_DESTINO
-Valor: \\FILESERVER\InventoryShare\Inventory
-Tipo: Machine/System
+INVENTORY_DESTINO=\\FILESERVER\InventoryShare\Inventory
 ```
 
-Preferencialmente via:
-
-```text
-Computer Configuration
-└─ Preferences
-   └─ Windows Settings
-      └─ Environment
-```
-
-Para teste manual:
+Você pode distribuí-la por **Group Policy Preferences > Environment** ou usar:
 
 ```powershell
-[Environment]::SetEnvironmentVariable(
-  'INVENTORY_DESTINO',
-  '\\FILESERVER\InventoryShare\Inventory',
-  'Machine'
-)
+.\tools\Set-InventoryDestination.ps1 -Path "\\FILESERVER\InventoryShare\Inventory"
 ```
 
-## 3. Criar a GPO
+## Permissões
 
-```powershell
-.\tools\Create-InventoryGPO.ps1 `
-  -TargetOU "OU=Workstations,DC=example,DC=local"
-```
+O agente executa como `SYSTEM`. No acesso SMB remoto, a estação usa sua conta de computador.
 
-O script cria e vincula a GPO. A configuração do Startup Script continua sendo feita na GPMC para que os arquivos fiquem no diretório correto do SYSVOL.
+Recomendação:
 
-## 4. SYSVOL
+- grupo de segurança dedicado, por exemplo `Inventory-GPO-Computers`;
+- NTFS `Modify` no diretório de inventário;
+- revisar separadamente as permissões do compartilhamento SMB;
+- não usar `Full Control` sem necessidade.
 
-Na GPMC, abra:
+## Arquivos do SYSVOL
+
+Copie para a pasta de Startup da GPO:
 
 ```text
-Computer Configuration > Policies > Windows Settings
-> Scripts (Startup/Shutdown) > Startup > Show Files
-```
-
-Copie:
-
-```text
-Deploy_GMInventory_GPO.cmd
+Deploy-Inventory-GPO.cmd
 Collect-Inventory.ps1
 Run-Inventory.ps1
 Install-InventoryTask.ps1
 ```
 
-Na lista de Startup Scripts, cadastre somente:
+Na lista de scripts de inicialização, adicione somente:
 
 ```text
-Deploy_GMInventory_GPO.cmd
+Deploy-Inventory-GPO.cmd
 ```
 
-## 5. Security Filtering
+## Piloto
 
-Comece com uma estação piloto. Depois valide uma segunda estação limpa. Somente então altere a filtragem para o grupo dedicado de computadores.
+Comece com uma única estação na filtragem de segurança.
 
-## 6. O que acontece no boot
+```powershell
+gpupdate /force
+Restart-Computer
+```
 
-`Deploy_GMInventory_GPO.cmd` cria `C:\ProgramData\GMInventory`, copia componentes ausentes, compara arquivos existentes com `fc /b`, atualiza o que mudou, registra/atualiza a tarefa e grava `gpo-deploy.log`.
-
-A tarefa roda como `SYSTEM` e possui trigger de Startup, fallback de Logon, atraso calculado pelo nome do computador, `StartWhenAvailable`, bloqueio de múltiplas instâncias, timeout de 30 minutos e até 3 tentativas em caso de falha.
-
-## 7. Coleta diária
-
-`Run-Inventory.ps1` lê `INVENTORY_DESTINO`, verifica se já houve sucesso no dia, aguarda a rede, executa `Collect-Inventory.ps1` e grava `last-success.txt` somente após sucesso.
-
-Assim, vários boots no mesmo dia não provocam múltiplas coletas completas.
-
-## 8. Validação
+Depois confirme:
 
 ```powershell
 gpresult /r /scope computer
-Get-ScheduledTask -TaskName "GM - Inventario Diario"
-Get-Content "C:\ProgramData\GMInventory\logs\gpo-deploy.log" -Tail 30
+Get-ScheduledTask -TaskName "Inventory - Daily"
+Get-Content "C:\ProgramData\InventoryAgent\logs\gpo-deploy.log" -Tail 30
 ```
 
-Forçar um teste:
+## Teste imediato
 
 ```powershell
-Remove-Item "C:\ProgramData\GMInventory\state\last-success.txt" -Force -ErrorAction SilentlyContinue
-Start-ScheduledTask -TaskName "GM - Inventario Diario"
+.\tools\Test-Now.ps1
 ```
 
-Enquanto a tarefa estiver em execução, `LastTaskResult` pode aparecer como `267009` (`0x41301`). Espere o estado sair de `Running` e confirme `LastTaskResult = 0`.
+Ou manualmente:
 
-## 9. Rollout
+```powershell
+Remove-Item "C:\ProgramData\InventoryAgent\state\last-success.txt" -Force -ErrorAction SilentlyContinue
+Start-ScheduledTask -TaskName "Inventory - Daily"
+```
 
-Depois de dois pilotos bem-sucedidos:
+Aguarde a tarefa sair do estado `Running` e confira `LastTaskResult`. O valor `0` indica sucesso.
 
-1. mantenha a GPO vinculada somente na OU desejada;
-2. aplique o Security Filtering ao grupo de computadores;
-3. deixe as estações receberem a política nos boots seguintes;
-4. acompanhe a pasta central e os logs locais;
-5. use o consolidado/relatório central para identificar máquinas que ainda não reportaram.
+## Produção
+
+Depois de testar uma estação limpa:
+
+1. substitua filtros individuais pelo grupo de computadores;
+2. mantenha o vínculo da GPO habilitado;
+3. não use `Enforced` sem necessidade;
+4. monitore logs e a quantidade de estações reportando;
+5. mantenha o destino e detalhes internos fora do repositório público.
