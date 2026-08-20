@@ -4,8 +4,8 @@ param(
     [switch]$RemoveData
 )
 
-$TaskName = 'GM - Inventario Diario'
-$Base = 'C:\ProgramData\GMInventory'
+$TaskName = 'Inventory - Daily'
+$Base = 'C:\ProgramData\InventoryAgent'
 
 if(Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue){
     Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
@@ -13,8 +13,7 @@ if(Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue){
 }
 
 foreach($file in 'Collect-Inventory.ps1','Run-Inventory.ps1','Install-InventoryTask.ps1'){
-    $p = Join-Path $Base $file
-    Remove-Item $p -Force -ErrorAction SilentlyContinue
+    Remove-Item (Join-Path $Base $file) -Force -ErrorAction SilentlyContinue
 }
 
 if($RemoveData){
