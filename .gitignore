@@ -1,0 +1,7 @@
+*.log
+*.csv
+*.json
+*.xlsx
+output/
+private/
+*.local.*
