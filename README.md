@@ -2,13 +2,13 @@
 
 ![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-blue)
 ![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-blue)
-![Version](https://img.shields.io/badge/stable-8.2--GM-success)
+![Version](https://img.shields.io/badge/stable-8.2-success)
 
 Inventário automatizado de estações Windows distribuído por **Group Policy (GPO)**, executado como **Local System** e enviado para um compartilhamento SMB central.
 
-> **Versão estável: 8.2-GM.** A implantação foi validada primeiro em uma estação piloto e depois em uma estação limpa antes da expansão do escopo.
+> **Versão estável: 8.2.** A implantação deve ser validada primeiro em uma estação piloto e depois em uma estação limpa antes da expansão do escopo.
 
-> **Repositório público sanitizado.** IPs, domínio, nomes de servidores, OUs e compartilhamentos do ambiente real não são publicados. Configure o seu próprio caminho UNC.
+> **Repositório público sanitizado.** Não publique IPs, domínios, nomes de servidores, OUs, nomes de empresas, usuários ou compartilhamentos reais. Use valores genéricos e configure o seu próprio ambiente.
 
 ## Arquitetura
 
@@ -23,20 +23,20 @@ flowchart LR
     COLLECT --> SHARE[Compartilhamento SMB]
 ```
 
-## O que a v8.2-GM faz
+## O que a versão 8.2 faz
 
 - instala e atualiza o agente automaticamente pelo SYSVOL;
 - executa como `NT AUTHORITY\SYSTEM`;
-- cria a tarefa `GM - Inventario Diario`;
+- cria uma tarefa agendada de inventário diário;
 - inicia no boot e possui fallback no logon;
 - distribui o início entre **2 e 10 minutos** para reduzir pico de acesso ao servidor;
 - executa no máximo **uma coleta bem-sucedida por dia**;
-- tenta acessar o compartilhamento até 12 vezes quando a rede ainda não está pronta;
+- tenta acessar o compartilhamento várias vezes quando a rede ainda não está pronta;
 - mantém logs locais de deploy e coleta;
 - cria uma pasta individual por computador no destino central;
 - grava CSVs detalhados e JSON;
 - mantém histórico JSON diário por 30 dias;
-- remove APIPA `169.254.x.x`, VPNs e interfaces virtuais do **resumo** de IPs;
+- remove APIPA `169.254.x.x`, VPNs e interfaces virtuais do resumo de IPs;
 - mantém todos os endereços no arquivo detalhado `rede-<PC>.csv`.
 
 ## Dados coletados
@@ -55,16 +55,16 @@ src/
 └── Run-Inventory.ps1
 
 deploy/
-├── Deploy_GMInventory_GPO.cmd
+├── Deploy-Inventory-GPO.cmd
 └── Install-InventoryTask.ps1
 
 tools/
 ├── Configure-ADInventoryAccess.ps1
 ├── Create-InventoryGPO.ps1
 ├── Set-InventoryDestination.ps1
-├── Validate-GMInventory.ps1
+├── Validate-Inventory.ps1
 ├── Test-Now.ps1
-└── Remove-GMInventory.ps1
+└── Remove-Inventory.ps1
 
 docs/
 ├── ARCHITECTURE.md
@@ -84,7 +84,7 @@ Crie um diretório central, por exemplo:
 
 A tarefa roda como `SYSTEM`. Em acesso SMB remoto, a estação autentica usando a **conta do computador**. Use um grupo de segurança dedicado e conceda somente o necessário.
 
-O utilitário abaixo pode criar o grupo, adicionar os computadores de uma OU e aplicar `Modify` no NTFS:
+Exemplo:
 
 ```powershell
 .\tools\Configure-ADInventoryAccess.ps1 `
@@ -108,7 +108,7 @@ A versão pública lê o caminho central pela variável de ambiente de máquina:
 INVENTORY_DESTINO
 ```
 
-Valor de exemplo:
+Exemplo:
 
 ```text
 \\FILESERVER\InventoryShare\Inventory
@@ -119,11 +119,12 @@ Recomendado: distribuir por **Group Policy Preferences > Environment**.
 Para teste local:
 
 ```powershell
-.\tools\Set-InventoryDestination.ps1 `
-  -DestinationRoot "\\FILESERVER\InventoryShare\Inventory"
+.\tools\Set-InventoryDestination.ps1 -Path "\\FILESERVER\InventoryShare\Inventory"
 ```
 
-## 3. Criar e vincular a GPO
+## 3. Criar a GPO
+
+Exemplo:
 
 ```powershell
 .\tools\Create-InventoryGPO.ps1 `
@@ -131,190 +132,85 @@ Para teste local:
   -GpoName "GPO - Inventory - Workstations"
 ```
 
-## 4. Colocar os arquivos no SYSVOL
+## 4. Copiar arquivos para o SYSVOL
 
-Na GPMC:
+Em:
 
 ```text
 Computer Configuration
-└─ Policies
-   └─ Windows Settings
-      └─ Scripts (Startup/Shutdown)
-         └─ Startup
-            └─ Show Files...
+> Policies
+> Windows Settings
+> Scripts (Startup/Shutdown)
+> Startup
+> Show Files...
 ```
 
-Copie **quatro arquivos para a mesma pasta**:
+coloque no mesmo diretório:
 
 ```text
-Deploy_GMInventory_GPO.cmd
+Deploy-Inventory-GPO.cmd
+Install-InventoryTask.ps1
 Collect-Inventory.ps1
 Run-Inventory.ps1
-Install-InventoryTask.ps1
 ```
 
-Os dois arquivos de `src/` e os dois de `deploy/` devem ficar juntos nessa pasta do SYSVOL.
-
-Na lista de **Startup Scripts**, adicione **somente**:
+Na lista de Startup Scripts, adicione **somente**:
 
 ```text
-Deploy_GMInventory_GPO.cmd
+Deploy-Inventory-GPO.cmd
 ```
 
-Não adicione os `.ps1` separadamente.
+## 5. Teste piloto
 
-## 5. Fazer piloto
-
-Use Security Filtering para aplicar a GPO primeiro em uma única conta de computador.
-
-Na estação piloto:
+Comece com uma única máquina na filtragem de segurança da GPO.
 
 ```powershell
 gpupdate /force
 Restart-Computer
 ```
 
-Depois do boot:
+Depois valide:
 
 ```powershell
 gpresult /r /scope computer
-Get-Content "C:\ProgramData\GMInventory\logs\gpo-deploy.log" -Tail 30
-Get-ScheduledTask -TaskName "GM - Inventario Diario"
+Get-ScheduledTask -TaskName "Inventory - Daily"
+Get-Content "C:\ProgramData\InventoryAgent\logs\gpo-deploy.log" -Tail 30
 ```
 
-O log deve terminar com:
-
-```text
-Deploy GPO 8.2-GM concluido com sucesso.
-```
-
-## 6. Forçar uma coleta de teste
+## 6. Validar a coleta
 
 ```powershell
-Remove-Item "C:\ProgramData\GMInventory\state\last-success.txt" `
-  -Force -ErrorAction SilentlyContinue
-
-Start-ScheduledTask -TaskName "GM - Inventario Diario"
+Import-Csv "\\FILESERVER\InventoryShare\Inventory\PC-001\resumo-PC-001.csv" |
+Select-Object DataHora,VersaoColetor,Computador,IPPrincipal,IPv4Adicionais,AntivirusPrincipal
 ```
 
-Enquanto estiver executando, o Scheduler pode mostrar `267009` (`0x41301`), que significa **Running**.
+O resultado esperado é uma execução com código `0`, arquivos atualizados no destino central e sem APIPA ou interfaces virtuais no resumo.
 
-Espere terminar:
+## 7. Expandir para produção
 
-```powershell
-while ((Get-ScheduledTask -TaskName "GM - Inventario Diario").State -eq "Running") {
-    Start-Sleep -Seconds 3
-}
+Após validar uma máquina limpa:
 
-Get-ScheduledTaskInfo -TaskName "GM - Inventario Diario" |
-Format-List LastRunTime,LastTaskResult
-```
+1. remova filtros individuais de teste;
+2. adicione o grupo de segurança de computadores;
+3. mantenha a GPO vinculada à OU correta;
+4. deixe o vínculo habilitado;
+5. não use `Enforced` sem necessidade;
+6. monitore os logs e a quantidade de máquinas reportando.
 
-Resultado esperado:
+## Segurança
 
-```text
-LastTaskResult : 0
-```
-
-Log:
-
-```powershell
-Get-Content (
-  Get-ChildItem "C:\ProgramData\GMInventory\logs\inventario-*.log" |
-  Sort-Object LastWriteTime -Descending |
-  Select-Object -First 1
-).FullName -Tail 30
-```
-
-O final deve conter:
-
-```text
-[OK] SUCESSO: coleta concluida e enviada.
-```
-
-## 7. Validar o CSV central
-
-```powershell
-Import-Csv "\\FILESERVER\InventoryShare\Inventory\PC01\resumo-PC01.csv" |
-Select-Object DataHora,VersaoColetor,Computador,Usuario,IPPrincipal,IPv4Adicionais,AntivirusPrincipal
-```
-
-Esperado:
-
-```text
-VersaoColetor : 8.2-GM
-```
-
-Na v8.2-GM, `IPv4Adicionais` não deve conter APIPA `169.254.x.x` nem endereços de VPN/interface virtual. Esses endereços continuam nos CSVs detalhados `rede-<PC>.csv` e `interfaces-<PC>.csv`.
-
-## 8. Fazer um segundo piloto limpo
-
-Antes do rollout geral, faça o mesmo teste em uma estação que **nunca recebeu o agente manualmente**. Isso valida o fluxo completo:
-
-```text
-GPO → SYSVOL → cópia local → tarefa SYSTEM → coleta → SMB
-```
-
-Só depois amplie o Security Filtering para o grupo de computadores.
-
-# Operação diária
-
-Arquivos locais:
-
-```text
-C:\ProgramData\GMInventory\
-├── Collect-Inventory.ps1
-├── Run-Inventory.ps1
-├── Install-InventoryTask.ps1
-├── logs\
-└── state\
-```
-
-Tarefa:
-
-```text
-GM - Inventario Diario
-```
-
-Marcador diário:
-
-```text
-C:\ProgramData\GMInventory\state\last-success.txt
-```
-
-Destino central:
-
-```text
-<InventoryRoot>\<COMPUTERNAME>\
-```
-
-# Atualizações
-
-Para atualizar o agente, substitua os quatro arquivos na pasta de Startup da GPO. No boot seguinte, o deploy compara os arquivos e atualiza somente o que mudou; a tarefa também é registrada novamente com a configuração atual.
-
-# Rollback
-
-Em uma estação:
-
-```powershell
-.\tools\Remove-GMInventory.ps1
-```
-
-Para remover também logs e `state`:
-
-```powershell
-.\tools\Remove-GMInventory.ps1 -RemoveData
-```
-
-Remover o agente local não remove a GPO. Se a máquina continuar no escopo, o agente poderá ser reinstalado no próximo boot.
+- não armazena senha de usuário;
+- executa como `SYSTEM`;
+- usa conta de computador no acesso SMB;
+- recomenda grupo dedicado no AD;
+- recomenda `Modify`, não `Full Control`, no diretório de inventário;
+- não exige exposição direta à Internet;
+- não publique infraestrutura real neste repositório.
 
 ## Documentação
 
 - [Arquitetura](docs/ARCHITECTURE.md)
-- [Implantação detalhada](docs/DEPLOYMENT.md)
+- [Implantação](docs/DEPLOYMENT.md)
 - [Troubleshooting](docs/TROUBLESHOOTING.md)
 - [Segurança](SECURITY.md)
-
-## Segurança
-
-O projeto não armazena senha de usuário ou conta administrativa. Para ambientes reais, use grupo de segurança dedicado, revise permissões SMB e NTFS e nunca publique IPs, nomes internos, OUs, credenciais ou caminhos reais em repositórios públicos.
+- [Histórico de versões](CHANGELOG.md)
