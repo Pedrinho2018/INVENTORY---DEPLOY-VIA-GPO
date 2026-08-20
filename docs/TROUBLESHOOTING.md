@@ -1,139 +1,94 @@
 # Troubleshooting
 
-## A GPO aparece no gpresult, mas o agente não foi instalado
+## GPO não aparece no `gpresult`
 
 ```powershell
 gpresult /r /scope computer
 ```
 
-Verifique se os quatro arquivos estão diretamente na pasta aberta por **Startup > Show Files**.
+Verifique:
 
-Depois consulte:
+- vínculo da GPO;
+- filtragem de segurança;
+- associação da estação ao grupo autorizado;
+- OU correta;
+- replicação de AD/SYSVOL;
+- processamento de política de computador.
 
-```powershell
-Get-WinEvent -LogName "Microsoft-Windows-GroupPolicy/Operational" -MaxEvents 100 |
-Where-Object Message -match 'Startup|script' |
-Select-Object TimeCreated,Id,Message
-```
+## Script de Startup não executou
 
-## gpo-deploy.log não existe
-
-Se a GPO estiver aplicada mas o arquivo não existir:
-
-```text
-C:\ProgramData\GMInventory\logs\gpo-deploy.log
-```
-
-confirme o registro do Startup Script:
+Confirme os arquivos no SYSVOL e consulte:
 
 ```powershell
-reg query "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Group Policy\Scripts\Startup" /s
+Get-WinEvent -LogName "Microsoft-Windows-GroupPolicy/Operational" -MaxEvents 200 |
+Where-Object Message -match 'script|startup|inicializa' |
+Select-Object TimeCreated,Id,LevelDisplayName,Message
 ```
 
-`Deploy_GMInventory_GPO.cmd` deve aparecer.
-
-## Destino não configurado
+## Deploy não criou os arquivos locais
 
 Confira:
 
-```powershell
-[Environment]::GetEnvironmentVariable('INVENTORY_DESTINO','Machine')
+```text
+C:\ProgramData\InventoryAgent\logs\gpo-deploy.log
 ```
 
-Configure:
+E valide se estes arquivos existem localmente:
 
-```powershell
-[Environment]::SetEnvironmentVariable(
-  'INVENTORY_DESTINO',
-  '\\FILESERVER\InventoryShare\Inventory',
-  'Machine'
-)
+```text
+Collect-Inventory.ps1
+Run-Inventory.ps1
+Install-InventoryTask.ps1
 ```
 
-## Compartilhamento funciona para o usuário, mas falha como SYSTEM
-
-O acesso do usuário e o acesso da tarefa usam identidades diferentes. A tarefa usa a conta do computador no acesso remoto.
-
-Confira associação da conta de computador ao grupo autorizado, NTFS, SMB, DNS, rota e firewall entre a estação e o file server.
-
-## LastTaskResult = 267009
-
-`267009` é `0x41301`: a tarefa está **executando**.
-
-Espere:
+## Tarefa não existe
 
 ```powershell
-while ((Get-ScheduledTask -TaskName "GM - Inventario Diario").State -eq "Running") {
+Get-ScheduledTask -TaskName "Inventory - Daily"
+```
+
+Se necessário, execute o instalador local como administrador:
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File "C:\ProgramData\InventoryAgent\Install-InventoryTask.ps1"
+```
+
+## `LastTaskResult = 267009`
+
+Esse valor (`0x41301`) normalmente significa que a tarefa **ainda está executando**. Aguarde até sair do estado `Running` e consulte novamente:
+
+```powershell
+while ((Get-ScheduledTask -TaskName "Inventory - Daily").State -eq 'Running') {
     Start-Sleep -Seconds 3
 }
-```
-
-Depois:
-
-```powershell
-Get-ScheduledTaskInfo -TaskName "GM - Inventario Diario" |
+Get-ScheduledTaskInfo -TaskName "Inventory - Daily" |
 Format-List LastRunTime,LastTaskResult
 ```
 
-Sucesso:
+## Compartilhamento não acessível como SYSTEM
+
+Valide SMB e NTFS separadamente. Acesso interativo do usuário não comprova que a conta de computador possua permissão.
+
+## Coleta já executada hoje
+
+O runner mantém:
 
 ```text
-LastTaskResult : 0
+C:\ProgramData\InventoryAgent\state\last-success.txt
 ```
 
-## A coleta não roda novamente no mesmo dia
+Para um teste controlado, remova o marcador e inicie a tarefa novamente.
 
-Comportamento esperado. O marcador é:
+## Logs
+
+Deploy:
 
 ```text
-C:\ProgramData\GMInventory\state\last-success.txt
+C:\ProgramData\InventoryAgent\logs\gpo-deploy.log
 ```
 
-Para teste somente:
-
-```powershell
-Remove-Item "C:\ProgramData\GMInventory\state\last-success.txt" -Force
-Start-ScheduledTask -TaskName "GM - Inventario Diario"
-```
-
-## O resumo contém IPs 169.254.x.x
-
-Na v8.2-GM, APIPA não deve aparecer em `IPPrincipal` ou `IPv4Adicionais`.
-
-```powershell
-Import-Csv "\\FILESERVER\InventoryShare\Inventory\PC01\resumo-PC01.csv" |
-Select-Object VersaoColetor,IPPrincipal,IPv4Adicionais
-```
-
-Se estiver usando versão anterior, atualize os quatro arquivos do SYSVOL e reinicie a estação.
-
-## VPN e IP virtual sumiram do resumo
-
-Isso é intencional na v8.2-GM. Eles continuam disponíveis em:
+Coleta:
 
 ```text
-interfaces-<PC>.csv
-rede-<PC>.csv
+C:\ProgramData\InventoryAgent\logs\inventario-<PC>-<DATA>.log
 ```
-
-O resumo exibe somente IPs físicos ativos relevantes.
-
-## Ver o log mais recente
-
-```powershell
-Get-Content (
-  Get-ChildItem "C:\ProgramData\GMInventory\logs\inventario-*.log" |
-  Sort-Object LastWriteTime -Descending |
-  Select-Object -First 1
-).FullName -Tail 40
-```
-
-## Remover o agente de uma estação
-
-Primeiro tire a máquina do escopo da GPO. Depois:
-
-```powershell
-.\tools\Remove-GMInventory.ps1
-```
-
-Caso contrário, o Startup Script poderá reinstalar o agente no boot seguinte.
