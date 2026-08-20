@@ -2,15 +2,14 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)]
-    [ValidatePattern('^\\\\')]
-    [string]$DestinationRoot
+    [string]$Path
 )
 
-[Environment]::SetEnvironmentVariable(
-    'INVENTORY_DESTINO',
-    $DestinationRoot,
-    'Machine'
-)
+if([string]::IsNullOrWhiteSpace($Path)){
+    throw 'Informe um caminho UNC valido.'
+}
 
-Write-Host "[OK] INVENTORY_DESTINO configurado para: $DestinationRoot" -ForegroundColor Green
-Write-Host "[INFO] Novos processos do Windows passarao a enxergar a configuracao." -ForegroundColor Cyan
+[Environment]::SetEnvironmentVariable('INVENTORY_DESTINO',$Path,'Machine')
+Write-Host '[OK] INVENTORY_DESTINO configurado para:' -ForegroundColor Green
+Write-Host "     $Path"
+Write-Host '[INFO] A nova variavel sera usada pelas proximas execucoes do agente.' -ForegroundColor Cyan
