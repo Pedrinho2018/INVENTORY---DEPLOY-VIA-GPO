@@ -9,11 +9,23 @@ $ErrorActionPreference = 'Stop'
 $now = Get-Date
 $computer = $env:COMPUTERNAME
 $target = Join-Path $DestinationRoot $computer
+
 New-Item -ItemType Directory -Force -Path $target | Out-Null
 
 function Try-Value {
     param([scriptblock]$Script,[object]$Default=$null)
     try { & $Script } catch { $Default }
+}
+
+function Clean-Text {
+    param([AllowNull()][object]$Value)
+
+    if ($null -eq $Value) { return $null }
+
+    $s = [string]$Value
+    $s = $s -replace '[\u00A0\u00FF\u2007\u202F]', ' '
+    $s = $s -replace '[\uFEFF\u0000]', ''
+    return [regex]::Replace($s, '\s+', ' ').Trim()
 }
 
 function Export-InventoryCsv {
@@ -22,18 +34,19 @@ function Export-InventoryCsv {
     @($Data) | Export-Csv -Path $path -NoTypeInformation -Encoding UTF8
 }
 
-function Clean-Text([object]$Value) {
-    if ($null -eq $Value) { return $null }
-    $s=[string]$Value
-    $s=$s.Replace([char]0x00A0,' ').Replace([char]0x00FF,' ')
-    [regex]::Replace($s,'\s+',' ').Trim()
-}
-
 $cs = Get-CimInstance Win32_ComputerSystem
 $os = Get-CimInstance Win32_OperatingSystem
 $bios = Get-CimInstance Win32_BIOS
 $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
 $board = Get-CimInstance Win32_BaseBoard | Select-Object -First 1
+
+$userName = $cs.UserName
+if (-not $userName) {
+    $userName = Try-Value {
+        (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\LogonUI' -ErrorAction Stop).LastLoggedOnUser
+    } $null
+}
+if (-not $userName) { $userName = $env:USERNAME }
 
 $ram = @(Get-CimInstance Win32_PhysicalMemory | ForEach-Object {
     [pscustomobject]@{
@@ -59,9 +72,9 @@ $monitors = @(Try-Value {
     Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorID -ErrorAction Stop | ForEach-Object {
         $decode = { param($a) if($a){ -join ($a | Where-Object {$_ -ne 0} | ForEach-Object {[char]$_}) } }
         [pscustomobject]@{
-            Fabricante=&$decode $_.ManufacturerName
-            Modelo=&$decode $_.UserFriendlyName
-            Serial=&$decode $_.SerialNumberID
+            Fabricante=Clean-Text (&$decode $_.ManufacturerName)
+            Modelo=Clean-Text (&$decode $_.UserFriendlyName)
+            Serial=Clean-Text (&$decode $_.SerialNumberID)
             Ativo=$_.Active
         }
     }
@@ -85,7 +98,7 @@ $volumes = @(Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3" | ForEach-O
     $freePct = if($_.Size){[math]::Round(($_.FreeSpace/$_.Size)*100,1)}else{0}
     [pscustomobject]@{
         Unidade=$_.DeviceID
-        Rotulo=$_.VolumeName
+        Rotulo=Clean-Text $_.VolumeName
         SistemaArquivos=$_.FileSystem
         TotalGB=[math]::Round($_.Size/1GB,2)
         LivreGB=[math]::Round($_.FreeSpace/1GB,2)
@@ -97,11 +110,20 @@ $volumes = @(Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3" | ForEach-O
 $adapters = @(Get-NetAdapter -ErrorAction SilentlyContinue)
 $interfaces = @()
 $networkRows = @()
+
 foreach($a in $adapters){
     $cfg = Try-Value { Get-NetIPConfiguration -InterfaceIndex $a.ifIndex -ErrorAction Stop } $null
-    $v4 = @($cfg.IPv4Address.IPAddress)
-    $v6 = @($cfg.IPv6Address.IPAddress)
-    $type = if($a.InterfaceDescription -match 'VPN|Forti|TAP|WireGuard|OpenVPN'){'VPN'}elseif($a.Virtual){'Virtual'}else{'Physical'}
+    $v4 = @($cfg.IPv4Address.IPAddress | Where-Object {$_})
+    $v6 = @($cfg.IPv6Address.IPAddress | Where-Object {$_})
+
+    $type = if($a.InterfaceDescription -match 'VPN|Forti|TAP|WireGuard|OpenVPN|AnyConnect'){
+        'VPN'
+    } elseif($a.InterfaceDescription -match 'Hyper-V|Virtual|VMware|VirtualBox|Loopback'){
+        'Virtual'
+    } else {
+        'Physical'
+    }
+
     $interfaces += [pscustomobject]@{
         Interface=$a.Name
         Descricao=Clean-Text $a.InterfaceDescription
@@ -115,10 +137,12 @@ foreach($a in $adapters){
         DNS=@($cfg.DNSServer.ServerAddresses) -join '; '
         DHCP=Try-Value { (Get-NetIPInterface -InterfaceIndex $a.ifIndex -AddressFamily IPv4).Dhcp } $null
     }
+
     foreach($ip in $v4){
         $addr=Try-Value { Get-NetIPAddress -InterfaceIndex $a.ifIndex -IPAddress $ip -AddressFamily IPv4 } $null
         $networkRows += [pscustomobject]@{
             Interface=$a.Name
+            Descricao=Clean-Text $a.InterfaceDescription
             Tipo=$type
             IPv4=$ip
             PrefixLength=$addr.PrefixLength
@@ -130,11 +154,48 @@ foreach($a in $adapters){
     }
 }
 
-$primaryIp = Try-Value { (Find-NetRoute -RemoteIPAddress '1.1.1.1' -ErrorAction Stop | Where-Object IPAddress | Select-Object -First 1).IPAddress } $null
+$physicalActiveRows = @(
+    $networkRows |
+    Where-Object {
+        $_.Tipo -eq 'Physical' -and
+        $_.Status -eq 'Up' -and
+        $_.IPv4 -and
+        $_.IPv4 -notlike '169.254.*' -and
+        $_.IPv4 -ne '0.0.0.0'
+    }
+)
+
+$primaryIp = Try-Value {
+    $route = Find-NetRoute -RemoteIPAddress '1.1.1.1' -ErrorAction Stop |
+        Where-Object IPAddress |
+        Select-Object -First 1
+
+    if($route.IPAddress -and $route.IPAddress -notlike '169.254.*'){
+        $row = $physicalActiveRows | Where-Object IPv4 -eq $route.IPAddress | Select-Object -First 1
+        if($row){ $route.IPAddress }
+    }
+} $null
+
 if(-not $primaryIp){
-    $primaryIp = @($networkRows | Where-Object {$_.Tipo -eq 'Physical' -and $_.IPv4 -notlike '169.254*'} | Select-Object -ExpandProperty IPv4 -First 1)[0]
+    $primaryIp = @(
+        $physicalActiveRows |
+        Where-Object {$_.Gateway} |
+        Select-Object -ExpandProperty IPv4 -First 1
+    )[0]
 }
-$additionalIps = @($networkRows.IPv4 | Where-Object {$_ -and $_ -ne $primaryIp} | Select-Object -Unique)
+
+if(-not $primaryIp){
+    $primaryIp = @(
+        $physicalActiveRows |
+        Select-Object -ExpandProperty IPv4 -First 1
+    )[0]
+}
+
+$additionalIps = @(
+    $physicalActiveRows |
+    Where-Object {$_.IPv4 -ne $primaryIp} |
+    Select-Object -ExpandProperty IPv4 -Unique
+)
 
 $windowsLicense = Try-Value {
     Get-CimInstance SoftwareLicensingProduct |
@@ -189,6 +250,7 @@ $antivirus = @(Try-Value {
 } @())
 
 $defender = Try-Value { Get-MpComputerStatus } $null
+
 $bitlocker = @(Try-Value {
     Get-BitLockerVolume | ForEach-Object {
         [pscustomobject]@{
@@ -208,42 +270,71 @@ $uninstall = @(
     'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
     'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
 )
+
 foreach($key in $uninstall){
-    $programs += @(Get-ItemProperty $key -ErrorAction SilentlyContinue | Where-Object DisplayName | ForEach-Object {
-        [pscustomobject]@{
-            Nome=Clean-Text $_.DisplayName
-            Versao=Clean-Text $_.DisplayVersion
-            Fabricante=Clean-Text $_.Publisher
-            InstallDate=$_.InstallDate
-        }
-    })
+    $programs += @(Get-ItemProperty $key -ErrorAction SilentlyContinue |
+        Where-Object DisplayName |
+        ForEach-Object {
+            [pscustomobject]@{
+                Nome=Clean-Text $_.DisplayName
+                Versao=Clean-Text $_.DisplayVersion
+                Fabricante=Clean-Text $_.Publisher
+                InstallDate=$_.InstallDate
+            }
+        })
 }
+
 $programs = @($programs | Sort-Object Nome,Versao -Unique)
 $office = @($programs | Where-Object {$_.Nome -match 'Microsoft (365|Office)'})
+
 $printers = @(Try-Value {
     Get-Printer | ForEach-Object {
-        [pscustomobject]@{Nome=$_.Name;Driver=$_.DriverName;Porta=$_.PortName;Compartilhada=$_.Shared}
+        [pscustomobject]@{
+            Nome=Clean-Text $_.Name
+            Driver=Clean-Text $_.DriverName
+            Porta=$_.PortName
+            Compartilhada=$_.Shared
+        }
     }
 } @())
-$services = @(Get-Service | Where-Object {$_.Name -match 'WinRM|wuauserv|BITS|LanmanServer|EventLog|TermService'} | ForEach-Object {
-    [pscustomobject]@{Nome=$_.Name;Status=$_.Status;Inicio=$_.StartType}
-})
+
+$services = @(Get-Service |
+    Where-Object {$_.Name -match 'WinRM|wuauserv|BITS|LanmanServer|EventLog|TermService'} |
+    ForEach-Object {
+        [pscustomobject]@{
+            Nome=$_.Name
+            Status=$_.Status
+            Inicio=$_.StartType
+        }
+    })
+
 $admins = @(Try-Value {
     $adminGroup=(Get-LocalGroup -SID 'S-1-5-32-544').Name
     Get-LocalGroupMember -Group $adminGroup | ForEach-Object {
-        [pscustomobject]@{Nome=$_.Name;Tipo=$_.ObjectClass;Origem=$_.PrincipalSource}
+        [pscustomobject]@{
+            Nome=$_.Name
+            Tipo=$_.ObjectClass
+            Origem=$_.PrincipalSource
+        }
     }
 } @())
+
 $hotfixes = @(Get-HotFix -ErrorAction SilentlyContinue | Sort-Object InstalledOn -Descending)
 $latestHotfix = $hotfixes | Select-Object -First 1
-$rebootPending = (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending') -or (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired')
+
+$rebootPending = (
+    (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending') -or
+    (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired')
+)
+
+$fqdn = Try-Value {[System.Net.Dns]::GetHostEntry($computer).HostName} $computer
 
 $summary = [pscustomobject]@{
     DataHora=$now.ToString('yyyy-MM-dd HH:mm:ss')
-    VersaoColetor='8.0'
+    VersaoColetor='8.2-GM'
     Computador=$computer
-    FQDN=Try-Value {[System.Net.Dns]::GetHostEntry($computer).HostName} $computer
-    Usuario=$cs.UserName
+    FQDN=$fqdn
+    Usuario=$userName
     Dominio=$cs.Domain
     Fabricante=Clean-Text $cs.Manufacturer
     Modelo=Clean-Text $cs.Model
@@ -277,6 +368,8 @@ $security = [pscustomobject]@{
     SecureBoot=$secureBoot
     TPMPresente=$tpm.TpmPresent
     TPMReady=$tpm.TpmReady
+    TPMEnabled=$tpm.TpmEnabled
+    TPMActivated=$tpm.TpmActivated
     DefenderRealtime=$defender.RealTimeProtectionEnabled
     DefenderAntivirus=$defender.AntivirusEnabled
     RebootPendente=$rebootPending
@@ -333,13 +426,17 @@ $complete=[ordered]@{
     Hotfixes=$hotfixes
 }
 
-$complete | ConvertTo-Json -Depth 10 | Set-Content -Path (Join-Path $target "inventario-atual-$computer.json") -Encoding UTF8
+$complete | ConvertTo-Json -Depth 10 |
+    Set-Content -Path (Join-Path $target "inventario-atual-$computer.json") -Encoding UTF8
 
 $history=Join-Path $target 'Historico'
 New-Item -ItemType Directory -Force -Path $history | Out-Null
-$complete | ConvertTo-Json -Depth 10 | Set-Content -Path (Join-Path $history ("inventario-{0}-{1}.json" -f $computer,$now.ToString('yyyyMMdd'))) -Encoding UTF8
+
+$complete | ConvertTo-Json -Depth 10 |
+    Set-Content -Path (Join-Path $history ("inventario-{0}-{1}.json" -f $computer,$now.ToString('yyyyMMdd'))) -Encoding UTF8
+
 Get-ChildItem $history -Filter "inventario-$computer-*.json" -File -ErrorAction SilentlyContinue |
     Where-Object LastWriteTime -lt $now.AddDays(-30) |
     Remove-Item -Force -ErrorAction SilentlyContinue
 
-$summary
+Write-Output $summary
