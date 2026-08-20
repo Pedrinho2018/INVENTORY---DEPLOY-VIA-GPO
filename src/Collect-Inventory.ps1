@@ -19,9 +19,7 @@ function Try-Value {
 
 function Clean-Text {
     param([AllowNull()][object]$Value)
-
     if ($null -eq $Value) { return $null }
-
     $s = [string]$Value
     $s = $s -replace '[\u00A0\u00FF\u2007\u202F]', ' '
     $s = $s -replace '[\uFEFF\u0000]', ''
@@ -177,18 +175,10 @@ $primaryIp = Try-Value {
 } $null
 
 if(-not $primaryIp){
-    $primaryIp = @(
-        $physicalActiveRows |
-        Where-Object {$_.Gateway} |
-        Select-Object -ExpandProperty IPv4 -First 1
-    )[0]
+    $primaryIp = @($physicalActiveRows | Where-Object {$_.Gateway} | Select-Object -ExpandProperty IPv4 -First 1)[0]
 }
-
 if(-not $primaryIp){
-    $primaryIp = @(
-        $physicalActiveRows |
-        Select-Object -ExpandProperty IPv4 -First 1
-    )[0]
+    $primaryIp = @($physicalActiveRows | Select-Object -ExpandProperty IPv4 -First 1)[0]
 }
 
 $additionalIps = @(
@@ -250,7 +240,6 @@ $antivirus = @(Try-Value {
 } @())
 
 $defender = Try-Value { Get-MpComputerStatus } $null
-
 $bitlocker = @(Try-Value {
     Get-BitLockerVolume | ForEach-Object {
         [pscustomobject]@{
@@ -301,27 +290,18 @@ $printers = @(Try-Value {
 $services = @(Get-Service |
     Where-Object {$_.Name -match 'WinRM|wuauserv|BITS|LanmanServer|EventLog|TermService'} |
     ForEach-Object {
-        [pscustomobject]@{
-            Nome=$_.Name
-            Status=$_.Status
-            Inicio=$_.StartType
-        }
+        [pscustomobject]@{Nome=$_.Name;Status=$_.Status;Inicio=$_.StartType}
     })
 
 $admins = @(Try-Value {
     $adminGroup=(Get-LocalGroup -SID 'S-1-5-32-544').Name
     Get-LocalGroupMember -Group $adminGroup | ForEach-Object {
-        [pscustomobject]@{
-            Nome=$_.Name
-            Tipo=$_.ObjectClass
-            Origem=$_.PrincipalSource
-        }
+        [pscustomobject]@{Nome=$_.Name;Tipo=$_.ObjectClass;Origem=$_.PrincipalSource}
     }
 } @())
 
 $hotfixes = @(Get-HotFix -ErrorAction SilentlyContinue | Sort-Object InstalledOn -Descending)
 $latestHotfix = $hotfixes | Select-Object -First 1
-
 $rebootPending = (
     (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending') -or
     (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired')
@@ -331,7 +311,7 @@ $fqdn = Try-Value {[System.Net.Dns]::GetHostEntry($computer).HostName} $computer
 
 $summary = [pscustomobject]@{
     DataHora=$now.ToString('yyyy-MM-dd HH:mm:ss')
-    VersaoColetor='8.2-GM'
+    VersaoColetor='8.2'
     Computador=$computer
     FQDN=$fqdn
     Usuario=$userName
