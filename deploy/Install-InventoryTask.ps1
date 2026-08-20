@@ -6,15 +6,17 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$taskName = 'GM - Inventario Diario'
-$runner = 'C:\ProgramData\GMInventory\Run-Inventory.ps1'
+$taskName = 'Inventory - Daily'
+$runner = 'C:\ProgramData\InventoryAgent\Run-Inventory.ps1'
 
 if(-not (Test-Path $runner)){
     throw "Runner nao encontrado: $runner"
 }
 
 $sum = 0
-foreach($c in $env:COMPUTERNAME.ToCharArray()){ $sum += [int]$c }
+foreach($c in $env:COMPUTERNAME.ToCharArray()){
+    $sum += [int]$c
+}
 
 $startupDelayMinutes = 2 + ($sum % 9)
 $logonDelayMinutes = 1 + ($sum % 5)
@@ -47,7 +49,7 @@ Register-ScheduledTask `
     -Trigger @($startup,$logon) `
     -Settings $settings `
     -Principal $principal `
-    -Description 'GM Inventory 8.2 - coleta diaria via GPO' `
+    -Description 'Inventory Agent 8.2 - coleta diaria via GPO' `
     -Force | Out-Null
 
 if($StartNow){
