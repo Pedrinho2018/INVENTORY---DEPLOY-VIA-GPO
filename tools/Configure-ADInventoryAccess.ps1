@@ -7,13 +7,13 @@ param(
     [Parameter(Mandatory)]
     [string]$GroupOU,
 
-    [string]$GroupName = "Inventory-GPO-Computers",
+    [string]$GroupName = 'Inventory-GPO-Computers',
 
     [Parameter(Mandatory)]
     [string]$InventoryPath
 )
 
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = 'Stop'
 Import-Module ActiveDirectory -ErrorAction Stop
 
 $domain = Get-ADDomain
@@ -34,7 +34,7 @@ if (-not $group) {
         -GroupCategory Security `
         -GroupScope Global `
         -Path $GroupOU `
-        -Description "Computadores autorizados a gravar inventario via GPO"
+        -Description 'Computadores autorizados a gravar inventario via GPO'
     $group = Get-ADGroup -Identity $GroupName
     Write-Host "[OK] Grupo criado: $GroupName" -ForegroundColor Green
 } else {
@@ -78,4 +78,4 @@ $acl.SetAccessRule($rule)
 Set-Acl -LiteralPath $InventoryPath -AclObject $acl
 
 Write-Host "[OK] NTFS Modify aplicado para $identity" -ForegroundColor Green
-Write-Host "[INFO] Confira tambem a permissao SMB do compartilhamento com Get-SmbShareAccess." -ForegroundColor Yellow
+Write-Host '[INFO] Confira tambem a permissao SMB do compartilhamento com Get-SmbShareAccess.' -ForegroundColor Yellow
